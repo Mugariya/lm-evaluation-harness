@@ -18,6 +18,7 @@ Homepage: https://github.com/openai/grade-school-math
 """
 import re
 from lm_eval.base import Task, rf
+from lm_eval.mixins import MajorityVotingMixin
 from lm_eval.metrics import mean
 
 
@@ -34,10 +35,11 @@ _CITATION = """
 
 
 ANS_RE = re.compile(r"#### (\-?[0-9\.\,]+)")
+SAMPLE_RE = re.compile(r"The answer is (\d+)")
 INVALID_ANS = "[invalid]"
 
 
-class GradeSchoolMath8K(Task):
+class GradeSchoolMath8K(MajorityVotingMixin, Task):
     VERSION = 0
     DATASET_PATH = "gsm8k"
     DATASET_NAME = "main"
@@ -90,13 +92,37 @@ class GradeSchoolMath8K(Task):
             return match_str
         else:
             return INVALID_ANS
+        
+    def _extract_answer_from_sample(self, completion):
+        match = SAMPLE_RE.search(completion)
+        if match:
+            match_str = match.group(1).strip()
+            match_str = match_str.replace(",", "")
+            return match_str
+        else:
+            return INVALID_ANS
 
     def _is_correct(self, completion, answer):
         gold = self._extract_answer(answer)
         assert gold != INVALID_ANS, "No ground truth answer found in the document."
         return self._extract_answer(completion) == gold
 
-    def process_results(self, doc, results):
+#     def process_results(self, doc, results):
+#         """Take a single document and the LM results and evaluates, returning a
+#         dict where keys are the names of submetrics and values are the values of
+#         the metric for that one document
+
+#         :param doc:
+#             The document as returned from training_docs, validation_docs, or test_docs.
+#         :param results:
+#             The results of the requests created in construct_requests.
+#         """
+#         completion = results[0]
+#         answer = doc["answer"]
+#         return {"acc": self._is_correct(completion, answer)}
+
+
+    def process_results(self, doc, results, params):
         """Take a single document and the LM results and evaluates, returning a
         dict where keys are the names of submetrics and values are the values of
         the metric for that one document
@@ -107,16 +133,51 @@ class GradeSchoolMath8K(Task):
             The results of the requests created in construct_requests.
         """
         completion = results[0]
-        answer = doc["answer"]
-        return {"acc": self._is_correct(completion, answer)}
 
+        gold = self._extract_answer(doc["answer"])
+
+        if self.MAJORITY_VOTING not in params:
+            answer = self._extract_answer_from_sample(completion)
+
+            if answer==gold:
+                acc = 1
+            else:
+                acc = 0
+
+            pass_rate = acc
+        else:
+            answers = [self._extract_answer_from_sample(x) for x in completion]
+            answers = [x for x in answers if x!=INVALID_ANS]
+
+            acc, pass_rate, votes = self.majority_vote(
+                    answers,
+                    correct_answer=gold
+            )
+
+            if votes:
+                answer = votes[0][0]
+            else:
+                answer = INVALID_ANS
+
+
+        return_dict = {
+                "acc": acc,
+                "pass_rate": pass_rate,
+                "metadata": {"completion": completion, "selected_answer": answer}
+        }
+
+        if self.MAJORITY_VOTING in params:
+            return_dict['metadata']['votes'] = votes
+
+        return return_dict
+    
     def aggregation(self):
         """
         :returns: {str: [float] -> float}
             A dictionary where keys are the names of submetrics and values are
             functions that aggregate a list of metrics
         """
-        return {"acc": mean}
+        return {"acc": mean, "pass_rate": mean}
 
     def higher_is_better(self):
         """
@@ -124,4 +185,20 @@ class GradeSchoolMath8K(Task):
             A dictionary where keys are the names of submetrics and values are
             whether a higher value of the submetric is better
         """
-        return {"acc": True}
+        return {"acc": True, "pass_rate": True}
+
+#     def aggregation(self):
+#         """
+#         :returns: {str: [float] -> float}
+#             A dictionary where keys are the names of submetrics and values are
+#             functions that aggregate a list of metrics
+#         """
+#         return {"acc": mean}
+
+#     def higher_is_better(self):
+#         """
+#         :returns: {str: bool}
+#             A dictionary where keys are the names of submetrics and values are
+#             whether a higher value of the submetric is better
+#         """
+#         return {"acc": True}
