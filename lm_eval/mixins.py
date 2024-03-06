@@ -14,7 +14,7 @@ import sympy
 from sympy.core.sympify import SympifyError
 from sympy.parsing.latex import parse_latex
 
-from lm_eval.utils import timeout
+# from lm_eval.utils import timeout
 from lm_eval.base import rf
 
 class MajorityVotingMixin:
